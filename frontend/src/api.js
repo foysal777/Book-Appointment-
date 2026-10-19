@@ -5,12 +5,27 @@ const API_BASE = '/api';
  */
 export async function getAvailableSlots(dateString) {
   const url = dateString ? `${API_BASE}/available-slots/?date=${dateString}` : `${API_BASE}/available-slots/`;
-  const res = await fetch(url);
-  if (!res.ok) {
-    const errorData = await res.json().catch(() => ({}));
-    throw new Error(errorData.error || 'Failed to fetch available slots');
+  let res;
+  try {
+    res = await fetch(url);
+  } catch (err) {
+    throw new Error('Cannot connect to backend server. Make sure Django is running on port 8000.');
   }
-  return res.json();
+
+  const text = await res.text();
+  let data = {};
+  try {
+    data = JSON.parse(text);
+  } catch {
+    if (!res.ok) {
+      throw new Error(`Backend error (${res.status}): Make sure Django is running on port 8000.`);
+    }
+  }
+
+  if (!res.ok) {
+    throw new Error(data.error || data.detail || `Failed to fetch slots (Status ${res.status})`);
+  }
+  return data;
 }
 
 /**
@@ -23,40 +38,69 @@ export async function getAppointments(filters = {}) {
   if (filters.search) params.append('search', filters.search);
 
   const query = params.toString() ? `?${params.toString()}` : '';
-  const res = await fetch(`${API_BASE}/appointments/${query}`);
-  if (!res.ok) {
-    const errorData = await res.json().catch(() => ({}));
-    throw new Error(errorData.error || 'Failed to fetch appointments');
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/appointments/${query}`);
+  } catch (err) {
+    throw new Error('Cannot connect to backend server. Make sure Django is running on port 8000.');
   }
-  return res.json();
+
+  const text = await res.text();
+  let data = [];
+  try {
+    data = JSON.parse(text);
+  } catch {
+    if (!res.ok) {
+      throw new Error(`Backend error (${res.status}): Make sure Django is running on port 8000.`);
+    }
+  }
+
+  if (!res.ok) {
+    throw new Error(data.error || data.detail || `Failed to fetch appointments (Status ${res.status})`);
+  }
+  return data;
 }
 
 /**
  * Create a new appointment
  */
 export async function createAppointment(appointmentData) {
-  const res = await fetch(`${API_BASE}/appointments/`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(appointmentData),
-  });
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/appointments/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(appointmentData),
+    });
+  } catch (networkErr) {
+    throw new Error('Cannot connect to backend server. Please verify Django is running on port 8000.');
+  }
 
-  const data = await res.json().catch(() => ({}));
+  const text = await res.text();
+  let data = {};
+  try {
+    data = JSON.parse(text);
+  } catch {
+    if (!res.ok) {
+      throw new Error(`Server returned status ${res.status}: Backend connection refused or error.`);
+    }
+  }
 
   if (!res.ok) {
-    // Format error message nicely from DRF response
     let errorMessage = data.error || data.detail || '';
+    if (!errorMessage && data.non_field_errors) {
+      errorMessage = Array.isArray(data.non_field_errors) ? data.non_field_errors.join(' ') : data.non_field_errors;
+    }
     if (!errorMessage && typeof data === 'object') {
-      const keys = Object.keys(data);
-      if (keys.length > 0) {
-        const firstKey = keys[0];
-        const val = data[firstKey];
-        errorMessage = Array.isArray(val) ? `${firstKey}: ${val[0]}` : `${firstKey}: ${val}`;
+      const entries = Object.entries(data);
+      if (entries.length > 0) {
+        const [field, val] = entries[0];
+        errorMessage = Array.isArray(val) ? `${field}: ${val.join(' ')}` : `${field}: ${val}`;
       }
     }
-    const err = new Error(errorMessage || 'Failed to create appointment');
+    const err = new Error(errorMessage || `Request failed with status ${res.status}`);
     err.status = res.status;
     err.payload = data;
     throw err;
@@ -69,18 +113,23 @@ export async function createAppointment(appointmentData) {
  * Cancel an appointment
  */
 export async function cancelAppointment(appointmentId, reason = '') {
-  const res = await fetch(`${API_BASE}/appointments/${appointmentId}/cancel/`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ cancellation_reason: reason }),
-  });
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/appointments/${appointmentId}/cancel/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ cancellation_reason: reason }),
+    });
+  } catch (err) {
+    throw new Error('Cannot connect to backend server.');
+  }
 
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
-    throw new Error(data.error || 'Failed to cancel appointment');
+    throw new Error(data.error || data.detail || 'Failed to cancel appointment');
   }
 
   return data;
@@ -90,13 +139,18 @@ export async function cancelAppointment(appointmentId, reason = '') {
  * Update appointment status (e.g. COMPLETED or BOOKED)
  */
 export async function updateAppointmentStatus(appointmentId, newStatus, reason = '') {
-  const res = await fetch(`${API_BASE}/appointments/${appointmentId}/status/`, {
-    method: 'PATCH',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ status: newStatus, cancellation_reason: reason }),
-  });
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/appointments/${appointmentId}/status/`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ status: newStatus, cancellation_reason: reason }),
+    });
+  } catch (err) {
+    throw new Error('Cannot connect to backend server.');
+  }
 
   const data = await res.json().catch(() => ({}));
 
@@ -126,7 +180,12 @@ export async function deleteAppointment(appointmentId) {
  * Fetch dashboard stats
  */
 export async function getStats() {
-  const res = await fetch(`${API_BASE}/stats/`);
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/stats/`);
+  } catch (err) {
+    throw new Error('Cannot connect to backend server.');
+  }
   if (!res.ok) {
     throw new Error('Failed to fetch stats');
   }
